@@ -1,23 +1,171 @@
-# Logs
-logs
-*.log
+# ============================================
+# PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ============================================
+# VIRTUAL ENVIRONMENTS
+# ============================================
+venv/
+ENV/
+env/
+.venv
+env.bak/
+venv.bak/
+
+# ============================================
+# IDE & EDITORS
+# ============================================
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.code-workspace
+.sublime-project
+.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.swp
+*.swo
+*~
+
+# ============================================
+# TESTING & COVERAGE
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+.coverage.*
+
+# ============================================
+# DATABASE
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+
+# ============================================
+# ENVIRONMENT & SECRETS
+# ============================================
+.env
+.env.local
+.env.*.local
+.env.production
+secrets.json
+credentials.json
+
+# ============================================
+# NODE/FRONTEND
+# ============================================
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
-
-
-node_modules
-dist
-dist-ssr
+dist/
+dist-ssr/
 *.local
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# ============================================
+# OPERATING SYSTEM
+# ============================================
 .DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+._*
+.apdisk
+.TemporaryItems
+.Trashes
+ehthumbs.db
+
+# ============================================
+# BUILD OUTPUTS
+# ============================================
+backend/dist/
+backend/build/
+frontend/dist/
+frontend/build/
+
+# ============================================
+# TEMPORARY & LOG FILES
+# ============================================
+*.log
+*.tmp
+*.temp
+temp/
+*.bak
+*.backup
+
+# ============================================
+# REDIS
+# ============================================
+dump.rdb
+
+# ============================================
+# CELERY
+# ============================================
+celerybeat-schedule
+
+# ============================================
+# FAISS VECTORSTORES (generated, can be regenerated)
+# ============================================
+langchain_vstores/
+vectorstores/
+*.faiss
+
+# ============================================
+# UPLOADS & MEDIA (if stored locally during testing)
+# ============================================
+uploads/
+media/
+
+# ============================================
+# VITE
+# ============================================
+.vite/
+
+# ============================================
+# GIT
+# ============================================
+.git/
+.gitattributes
+
+# ============================================
+# DOCKER
+# ============================================
+.dockerignore
+
+# ============================================
+# MISC
+# ============================================
 *.suo
 *.ntvs*
 *.njsproj

@@ -14,7 +14,7 @@ Complete FastAPI backend for the HealthCare Management Platform with role-based 
 - Separate roles table for security
 
 ✅ **Patient Records Management**
-- Upload to AWS S3
+- Upload to Supabase Storage
 - File type detection (PDF, Image, DICOM, Reports)
 - View/Download records
 
@@ -75,22 +75,22 @@ docker-compose up
 
 ## Deployment Options
 
-### Option 1: AWS (EC2 + RDS + S3)
+### Option 1: Self-Hosted with Supabase
 
-1. **RDS PostgreSQL**
+1. **PostgreSQL Database**
+   - Use Supabase-hosted PostgreSQL with pgvector extension
+   - Connection details in DATABASE_URL env var
+
+2. **Supabase Storage**
    ```bash
-   # Create RDS instance with PostgreSQL 16 + pgvector
+   # Create storage bucket via Supabase Dashboard
+   # Bucket name: healthcare-records
+   # Set SUPABASE_URL and SUPABASE_KEY in environment
    ```
 
-2. **S3 Bucket**
+3. **Deployment on EC2 / VPS**
    ```bash
-   aws s3 mb s3://healthcare-records-bucket
-   aws s3api put-bucket-cors --bucket healthcare-records-bucket --cors-configuration file://cors.json
-   ```
-
-3. **EC2 Deployment**
-   ```bash
-   # SSH to EC2
+   # SSH to server
    git clone your-repo
    cd backend
    pip install -r requirements.txt
@@ -199,7 +199,7 @@ See `models.py` for complete schema including:
 1. **Always use HTTPS in production**
 2. **Change SECRET_KEY** to a strong random value
 3. **Enable Twilio** for real OTP sending
-4. **Setup S3 bucket policies** properly
+4. **Setup Supabase Storage** with proper access policies
 5. **Use strong passwords** for database
 6. **Enable rate limiting** (add middleware)
 7. **Implement HIPAA compliance** measures
@@ -217,9 +217,9 @@ pytest
 ## Monitoring
 
 - Add Sentry for error tracking
-- Use CloudWatch/DataDog for metrics
+- Use DataDog for metrics
 - Enable PostgreSQL query logging
-- Monitor S3 usage and costs
+- Monitor Supabase Storage usage and costs
 
 ## Frontend Integration
 

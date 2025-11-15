@@ -75,7 +75,7 @@ class Record(Base):
     patient_id = Column(UUID(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False)
     title = Column(String, nullable=False)
     file_type = Column(Enum(FileTypeEnum), nullable=False)
-    file_url = Column(String, nullable=False)  # S3 URL
+    file_url = Column(String, nullable=False)  # Supabase Storage URL
     uploaded_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     upload_date = Column(DateTime, default=datetime.utcnow)
     status = Column(Enum(RecordStatusEnum), default=RecordStatusEnum.PENDING)

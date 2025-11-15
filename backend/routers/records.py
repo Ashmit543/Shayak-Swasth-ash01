@@ -144,21 +144,18 @@ async def delete_record(
             detail="Record not found"
         )
     
-    # Use Data Ingestion Agent to handle S3 deletion
+    # Use Data Ingestion Agent to handle Supabase deletion
     agent_manager = get_agent_manager()
-    s3_client = agent_manager.data_ingestion_agent.s3_client
+    supabase_client = agent_manager.data_ingestion_agent.supabase_client
     
-    if s3_client:
+    if supabase_client:
         try:
-            # Delete from S3
-            s3_key = record.file_url.split('.com/')[-1]
-            s3_client.delete_object(
-                Bucket=agent_manager.data_ingestion_agent.bucket_name,
-                Key=s3_key
-            )
+            # Delete from Supabase
+            file_path = record.file_url.split(f"{agent_manager.data_ingestion_agent.bucket_name}/")[-1]
+            supabase_client.storage.from_(agent_manager.data_ingestion_agent.bucket_name).remove([file_path])
         except Exception as e:
             # Log error but continue with DB deletion
-            print(f"S3 deletion failed: {str(e)}")
+            print(f"Supabase deletion failed: {str(e)}")
     
     # Delete from database
     db.delete(record)

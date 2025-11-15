@@ -2,16 +2,17 @@
 Medical Insights Agent
 
 Extracts text from PDFs/images, generates embeddings, and creates summaries.
+Now with FAISS vectorstore for efficient embedding storage and retrieval.
 Triggered asynchronously after file upload via Celery background task.
 """
 
 import os
 import json
 import uuid
-import boto3
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from io import BytesIO
+from supabase import create_client
 
 try:
     import openai
@@ -19,7 +20,13 @@ try:
     from PIL import Image
     import pytesseract
 except ImportError:
-    pass  # Handle gracefully if optional dependencies not installed
+    pass
+
+# LangChain imports for better embeddings and vectorstore
+from langchain_openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain.schema import Document
 
 from .base_agent import BaseAgent
 from models import Record, RecordText, Embedding, RecordStatusEnum
@@ -29,37 +36,33 @@ class MedicalInsightsAgent(BaseAgent):
     
     def __init__(self):
         super().__init__("MedicalInsightsAgent")
-        self.s3_client = self._init_s3_client()
+        self.supabase_client = self._init_supabase_client()
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.bucket_name = os.getenv("S3_BUCKET_NAME")
+        self.bucket_name = os.getenv("SUPABASE_BUCKET", "healthcare-records")
         
         if self.openai_api_key:
             openai.api_key = self.openai_api_key
     
-    def _init_s3_client(self):
-        """Initialize S3 client"""
+    def _init_supabase_client(self):
+        """Initialize Supabase client"""
         try:
-            return boto3.client(
-                's3',
-                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                region_name=os.getenv("AWS_REGION", "us-east-1")
-            )
+            url = os.getenv("SUPABASE_URL")
+            key = os.getenv("SUPABASE_KEY")
+            if not url or not key:
+                raise ValueError("SUPABASE_URL or SUPABASE_KEY not set")
+            return create_client(url, key)
         except Exception as e:
-            self.logger.error(f"Failed to initialize S3 client: {str(e)}")
+            self.logger.error(f"Failed to initialize Supabase client: {str(e)}")
             return None
     
-    def download_from_s3(self, s3_url: str) -> Optional[bytes]:
-        """Download file from S3"""
+    def download_from_supabase(self, file_url: str) -> Optional[bytes]:
+        """Download file from Supabase"""
         try:
-            s3_key = s3_url.split('.com/')[-1]
-            response = self.s3_client.get_object(
-                Bucket=self.bucket_name,
-                Key=s3_key
-            )
-            return response['Body'].read()
+            file_path = file_url.split(f"{self.bucket_name}/")[-1]
+            response = self.supabase_client.storage.from_(self.bucket_name).download(file_path)
+            return response
         except Exception as e:
-            self.logger.error(f"Failed to download from S3: {str(e)}")
+            self.logger.error(f"Failed to download from Supabase: {str(e)}")
             return None
     
     def extract_text_from_pdf(self, file_content: bytes) -> List[str]:
@@ -118,6 +121,55 @@ class MedicalInsightsAgent(BaseAgent):
         
         return chunks
     
+    def create_faiss_vectorstore(self, texts: List[str], record_id: uuid.UUID) -> Optional[FAISS]:
+        """
+        Create FAISS vectorstore from text chunks.
+        Much faster than storing individual embeddings in DB.
+        """
+        try:
+            if not texts:
+                self.logger.warning("No texts provided for FAISS vectorstore")
+                return None
+            
+            # Use LangChain embeddings (consistent with RAG pipeline)
+            embeddings = OpenAIEmbeddings(
+                openai_api_key=self.openai_api_key,
+                model="text-embedding-ada-002"
+            )
+            
+            # Create documents with metadata
+            documents = [
+                Document(
+                    page_content=text,
+                    metadata={
+                        "record_id": str(record_id),
+                        "chunk_index": i
+                    }
+                )
+                for i, text in enumerate(texts)
+            ]
+            
+            # Create FAISS vectorstore
+            vectorstore = FAISS.from_documents(documents, embeddings)
+            
+            self.logger.info(f"Created FAISS vectorstore with {len(texts)} chunks for record {record_id}")
+            return vectorstore
+            
+        except Exception as e:
+            self.logger.error(f"FAISS vectorstore creation failed: {str(e)}")
+            return None
+    
+    def save_faiss_vectorstore(self, vectorstore: FAISS, record_id: uuid.UUID, base_path: str = "vectorstores") -> Optional[str]:
+        """Save FAISS vectorstore to disk for persistence"""
+        try:
+            vectorstore_path = f"{base_path}/record_{record_id}"
+            vectorstore.save_local(vectorstore_path)
+            self.logger.info(f"Saved FAISS vectorstore to {vectorstore_path}")
+            return vectorstore_path
+        except Exception as e:
+            self.logger.error(f"Failed to save FAISS vectorstore: {str(e)}")
+            return None
+    
     def generate_embedding(self, text: str) -> Optional[List[float]]:
         """Generate embedding using OpenAI API"""
         if not self.openai_api_key:
@@ -166,7 +218,7 @@ class MedicalInsightsAgent(BaseAgent):
     ) -> Dict[str, Any]:
         """
         Main processing workflow:
-        1. Download file from S3
+        1. Download file from Supabase Storage
         2. Extract text based on file type
         3. Chunk text for embeddings
         4. Generate embeddings
@@ -185,12 +237,12 @@ class MedicalInsightsAgent(BaseAgent):
             
             self.logger.info(f"Processing record: {record_id}")
             
-            # 2. Download from S3
-            file_content = self.download_from_s3(record.file_url)
+            # 2. Download from Supabase
+            file_content = self.download_from_supabase(record.file_url)
             if not file_content:
                 return self.handle_error(
                     Exception("Failed to download file"),
-                    "S3 download"
+                    "Supabase download"
                 )
             
             # 3. Extract text based on file type

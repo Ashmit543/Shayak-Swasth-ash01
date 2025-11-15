@@ -3,6 +3,7 @@ Query & Compliance Agent
 
 Handles AI queries using RAG (Retrieval Augmented Generation) and enforces
 role-based access control for medical records.
+Now with LangChain RetrievalQA + FAISS for better semantic search performance.
 Triggered by: /api/ai/search and /api/ai/ask endpoints
 """
 
@@ -18,6 +19,12 @@ try:
     import openai
 except ImportError:
     pass
+
+# LangChain imports for RAG
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.vectorstores import FAISS
+from langchain.chains import RetrievalQA
+from langchain.memory import ConversationBufferMemory
 
 from .base_agent import BaseAgent
 from models import (
@@ -35,8 +42,48 @@ class QueryComplianceAgent(BaseAgent):
         if self.openai_api_key:
             openai.api_key = self.openai_api_key
     
+    def load_faiss_vectorstore(self, record_id: uuid.UUID, base_path: str = "vectorstores") -> Optional[FAISS]:
+        """Load FAISS vectorstore for a specific record"""
+        try:
+            vectorstore_path = f"{base_path}/record_{record_id}"
+            embeddings = OpenAIEmbeddings(
+                openai_api_key=self.openai_api_key,
+                model="text-embedding-ada-002"
+            )
+            vectorstore = FAISS.load_local(vectorstore_path, embeddings)
+            self.logger.info(f"Loaded FAISS vectorstore for record {record_id}")
+            return vectorstore
+        except Exception as e:
+            self.logger.warning(f"Could not load FAISS vectorstore: {str(e)}")
+            return None
+    
+    def create_langchain_rag_chain(self, vectorstore: FAISS) -> Optional[RetrievalQA]:
+        """
+        Create LangChain RetrievalQA chain for better RAG performance.
+        Combines retriever + LLM for question answering.
+        """
+        try:
+            llm = ChatOpenAI(
+                api_key=self.openai_api_key,
+                model="gpt-3.5-turbo",
+                temperature=0.3
+            )
+            
+            rag_chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                chain_type="stuff",  # Simple chain type - good for medical data
+                retriever=vectorstore.as_retriever(search_kwargs={"k": 3}),
+                return_source_documents=True
+            )
+            
+            self.logger.info("Created LangChain RAG chain")
+            return rag_chain
+        except Exception as e:
+            self.logger.error(f"Failed to create RAG chain: {str(e)}")
+            return None
+    
     def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Calculate cosine similarity between two vectors"""
+        """Calculate cosine similarity between two vectors (fallback to manual search)"""
         try:
             v1 = np.array(vec1)
             v2 = np.array(vec2)

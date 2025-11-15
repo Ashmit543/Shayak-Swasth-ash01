@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from .data_ingestion_agent import DataIngestionAgent
 from .medical_insights_agent import MedicalInsightsAgent
 from .query_compliance_agent import QueryComplianceAgent
+from .langchain_medical_insights import LangChainMedicalInsightsAgent
+from .langchain_query_agent import LangChainQueryAgent
 from .base_agent import BaseAgent
 
 class AgentManager(BaseAgent):
@@ -22,6 +24,15 @@ class AgentManager(BaseAgent):
         self.data_ingestion_agent = DataIngestionAgent()
         self.medical_insights_agent = MedicalInsightsAgent()
         self.query_compliance_agent = QueryComplianceAgent()
+        # Optional LangChain PoC agents (do not replace default agents automatically)
+        try:
+            self.langchain_medical_insights_agent = LangChainMedicalInsightsAgent()
+            self.langchain_query_agent = LangChainQueryAgent()
+            self.logger.info("LangChain PoC agents initialized")
+        except Exception:
+            # Fail gracefully if dependencies are missing
+            self.langchain_medical_insights_agent = None
+            self.langchain_query_agent = None
         
         self.logger.info("Agent Manager initialized with all agents")
     
@@ -33,7 +44,7 @@ class AgentManager(BaseAgent):
             "agents": {
                 "data_ingestion": {
                     "name": self.data_ingestion_agent.name,
-                    "s3_configured": self.data_ingestion_agent.s3_client is not None
+                    "supabase_configured": self.data_ingestion_agent.supabase_client is not None
                 },
                 "medical_insights": {
                     "name": self.medical_insights_agent.name,
@@ -58,7 +69,7 @@ class AgentManager(BaseAgent):
     ) -> Dict[str, Any]:
         """
         Orchestrate the complete record upload workflow:
-        1. Data Ingestion Agent: Upload to S3 and create DB record
+        1. Data Ingestion Agent: Upload to Supabase Storage and create DB record
         2. Medical Insights Agent: Extract text and generate embeddings (async)
         """
         self.logger.info(f"Orchestrating record upload for patient: {patient_id}")

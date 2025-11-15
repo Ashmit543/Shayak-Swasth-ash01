@@ -1,17 +1,23 @@
 """
 Data Ingestion Agent
 
-Handles file uploads to S3 and stores metadata in PostgreSQL.
+Handles file uploads to Supabase Storage and stores metadata in PostgreSQL.
+Now with LangChain document loaders for better file handling.
 Triggered by: /api/records/upload endpoint
 """
 
 import os
 import uuid
-import boto3
 from datetime import datetime
 from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 from fastapi import UploadFile
+from io import BytesIO
+from supabase import create_client
+
+# LangChain imports
+from langchain_community.document_loaders import PyPDFLoader, ImageLoader
+from langchain.schema import Document
 
 from .base_agent import BaseAgent
 from models import Record, Patient, RecordStatusEnum, FileTypeEnum
@@ -21,20 +27,19 @@ class DataIngestionAgent(BaseAgent):
     
     def __init__(self):
         super().__init__("DataIngestionAgent")
-        self.s3_client = self._init_s3_client()
-        self.bucket_name = os.getenv("S3_BUCKET_NAME")
+        self.supabase_client = self._init_supabase_client()
+        self.bucket_name = os.getenv("SUPABASE_BUCKET", "healthcare-records")
     
-    def _init_s3_client(self):
-        """Initialize S3 client with AWS credentials"""
+    def _init_supabase_client(self):
+        """Initialize Supabase client"""
         try:
-            return boto3.client(
-                's3',
-                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                region_name=os.getenv("AWS_REGION", "us-east-1")
-            )
+            url = os.getenv("SUPABASE_URL")
+            key = os.getenv("SUPABASE_KEY")
+            if not url or not key:
+                raise ValueError("SUPABASE_URL or SUPABASE_KEY not set")
+            return create_client(url, key)
         except Exception as e:
-            self.logger.error(f"Failed to initialize S3 client: {str(e)}")
+            self.logger.error(f"Failed to initialize Supabase client: {str(e)}")
             return None
     
     def detect_file_type(self, filename: str) -> FileTypeEnum:
@@ -50,46 +55,40 @@ class DataIngestionAgent(BaseAgent):
         else:
             return FileTypeEnum.REPORT
     
-    async def upload_to_s3(
+    async def upload_to_supabase(
         self,
         file: UploadFile,
         patient_id: uuid.UUID,
         record_id: uuid.UUID
     ) -> Optional[str]:
-        """Upload file to S3 and return the URL"""
-        if not self.s3_client:
-            self.logger.error("S3 client not initialized")
+        """Upload file to Supabase and return the URL"""
+        if not self.supabase_client:
+            self.logger.error("Supabase client not initialized")
             return None
         
         try:
-            # Generate unique S3 key
+            # Generate unique file path
             file_extension = file.filename.split('.')[-1]
-            s3_key = f"records/{patient_id}/{record_id}.{file_extension}"
+            file_path = f"records/{patient_id}/{record_id}.{file_extension}"
             
             # Read file content
             content = await file.read()
             
-            # Upload to S3
-            self.s3_client.put_object(
-                Bucket=self.bucket_name,
-                Key=s3_key,
-                Body=content,
-                ContentType=file.content_type or 'application/octet-stream',
-                Metadata={
-                    'patient_id': str(patient_id),
-                    'record_id': str(record_id),
-                    'original_filename': file.filename
-                }
+            # Upload to Supabase Storage
+            response = self.supabase_client.storage.from_(self.bucket_name).upload(
+                file_path,
+                content,
+                {"cacheControl": "3600", "upsert": "false"}
             )
             
-            # Generate S3 URL
-            s3_url = f"https://{self.bucket_name}.s3.amazonaws.com/{s3_key}"
+            # Get public URL
+            file_url = self.supabase_client.storage.from_(self.bucket_name).get_public_url(file_path)
             
-            self.logger.info(f"File uploaded to S3: {s3_key}")
-            return s3_url
+            self.logger.info(f"File uploaded to Supabase: {file_path}")
+            return file_url
             
         except Exception as e:
-            self.logger.error(f"S3 upload failed: {str(e)}")
+            self.logger.error(f"Supabase upload failed: {str(e)}")
             return None
     
     async def ingest_record(
@@ -105,8 +104,8 @@ class DataIngestionAgent(BaseAgent):
         Main ingestion workflow:
         1. Validate patient exists
         2. Create record entry
-        3. Upload file to S3
-        4. Update record with S3 URL
+        3. Upload file to Supabase Storage
+        4. Update record with Supabase URL
         5. Log action
         6. Trigger Medical Insights Agent (async)
         """
@@ -139,19 +138,19 @@ class DataIngestionAgent(BaseAgent):
             
             self.logger.info(f"Record created: {record_id}")
             
-            # 4. Upload to S3
-            s3_url = await self.upload_to_s3(file, patient_id, record_id)
+            # 4. Upload to Supabase
+            supabase_url = await self.upload_to_supabase(file, patient_id, record_id)
             
-            if not s3_url:
+            if not supabase_url:
                 record.status = RecordStatusEnum.PENDING
                 db.commit()
                 return self.handle_error(
-                    Exception("S3 upload failed"),
+                    Exception("Supabase upload failed"),
                     "File upload"
                 )
             
-            # 5. Update record with S3 URL
-            record.file_url = s3_url
+            # 5. Update record with Supabase URL
+            record.file_url = supabase_url
             record.status = RecordStatusEnum.PROCESSING
             db.commit()
             
@@ -173,7 +172,7 @@ class DataIngestionAgent(BaseAgent):
                     "record_id": str(record_id),
                     "patient_id": str(patient_id),
                     "file_type": file_type.value,
-                    "s3_url": s3_url,
+                    "file_url": supabase_url,
                     "status": record.status.value,
                     "trigger_insights": True  # Signal to trigger Medical Insights Agent
                 },
@@ -184,35 +183,49 @@ class DataIngestionAgent(BaseAgent):
             db.rollback()
             return self.handle_error(e, "Record ingestion")
     
-    def get_record_url(
+    def load_document_with_langchain(self, file_path: str, file_type: FileTypeEnum) -> Optional[list[Document]]:
+        """
+        Load document using LangChain loaders for better file parsing.
+        This provides document metadata and structured content.
+        """
+        try:
+            if file_type == FileTypeEnum.PDF:
+                # Use LangChain's PDF loader for better parsing
+                loader = PyPDFLoader(file_path)
+                docs = loader.load()
+                self.logger.info(f"Loaded {len(docs)} documents from PDF using LangChain")
+                return docs
+            elif file_type == FileTypeEnum.IMAGE:
+                # Use LangChain's Image loader
+                loader = ImageLoader(file_path)
+                docs = loader.load()
+                self.logger.info(f"Loaded image document using LangChain")
+                return docs
+            else:
+                self.logger.warning(f"LangChain loader not available for file type: {file_type}")
+                return None
+        except Exception as e:
+            self.logger.error(f"LangChain document loading failed: {str(e)}")
+            return None
+    
+    def get_presigned_url(
         self,
         db: Session,
         record_id: uuid.UUID,
         user_id: uuid.UUID
     ) -> Optional[str]:
-        """Generate pre-signed URL for record download"""
+        """Generate public URL for record download"""
         try:
             record = db.query(Record).filter(Record.id == record_id).first()
             if not record:
                 return None
             
-            # Extract S3 key from URL
-            s3_key = record.file_url.split('.com/')[-1]
-            
-            # Generate pre-signed URL (valid for 1 hour)
-            url = self.s3_client.generate_presigned_url(
-                'get_object',
-                Params={
-                    'Bucket': self.bucket_name,
-                    'Key': s3_key
-                },
-                ExpiresIn=3600
-            )
-            
-            self.logger.info(f"Generated presigned URL for record: {record_id}")
-            return url
+            # Supabase Storage returns public URLs directly
+            # The file_url is already a public URL from Supabase
+            self.logger.info(f"Retrieved public URL for record: {record_id}")
+            return record.file_url
             
         except Exception as e:
-            self.logger.error(f"Failed to generate presigned URL: {str(e)}")
+            self.logger.error(f"Failed to retrieve public URL: {str(e)}")
             return None
 
